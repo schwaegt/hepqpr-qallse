@@ -14,6 +14,7 @@ import pickle
 import random
 
 from hepqpr.qallse.cli.func import *
+from hepqpr.qallse.cli.vqe import *
 import os.path as op
 
 # ==== RUN CONFIG TODO change it
@@ -21,17 +22,17 @@ import os.path as op
 loglevel = logging.DEBUG
 
 events = [1000]
-dss = [10]
+dss = [2]
 repeat = 1
 
-data_path = '/tmp/hpt-collapse/ds{ds}/event00000{event}-hits.csv'  # path to the datasets
+data_path = 'C:/Users/timsc/qallse/models/ds{ds}/event00000{event}-hits.csv'  # path to the datasets
 
-qubo_path = '/tmp'  # path where the qubos are pickled
+qubo_path = 'C:/Users/timsc/qallse/models/ds{ds}/'  # path where the qubos are pickled
 qubo_prefix = 'evt{event}-ds{ds}-'  # prefix for the qubo files
-output_path = '/tmp/'  # where to serialize the responses
+output_path = 'C:/Users/timsc/qallse/models/ds{ds}/'  # where to serialize the responses
 output_prefix = qubo_prefix  # prefix for serialized responses
 
-solver = 'neal'  # solver to use
+solver = 'vqe'  # solver to use
 solver_config = dict()  # parameters for the solver. Note that "seed" is generated later.
 
 # ==== configure logging
@@ -45,11 +46,19 @@ def run_one(event, ds):
     # load data
     path = data_path.format(event=event, ds=ds)
     dw = DataWrapper.from_path(path)
-    qubo_filepath = op.join(qubo_path, qubo_prefix.format(event=event, ds=ds) + 'qubo.pickle')
+    qubo_filepath = op.join(qubo_path.format(ds=ds), 'qubo.pickle')
 
     with open(qubo_filepath, 'rb') as f:
         Q = pickle.load(f)
     en0 = dw.compute_energy(Q)
+
+    #slice qubo for VQE
+    if solver == 'vqe':
+        xplet_filepath  = op.join(qubo_path.format(ds=ds), 'xplets.pickle')
+        with open(xplet_filepath, 'rb') as f:
+            xplets = pickle.load(f)
+        #list of QUBOS, to do: store as file in case VQE fails
+        Q_slices = slice_qubo(Q, xplets)
 
     for i in range(repeat):
         # set seed
@@ -65,15 +74,24 @@ def run_one(event, ds):
                     response = solve_qbsolv(Q, **solver_config)
                 elif solver == 'dwave':
                     response = solve_dwave(Q, **solver_config)
+                elif solver == 'vqe':
+                    response = solve_vqe(Q_slices)
                 else:
                     raise Exception('Invalid solver name.')
 
-            final_doublets, final_tracks = process_response(response)
+
+            if solver =='vqe':
+                final_doublets, final_tracks = process_response_vqe(response)
+            else:
+                final_doublets, final_tracks = process_response(response)
 
         # compute scores
         p, r, ms = dw.compute_score(final_doublets)
         trackml = dw.compute_trackml_score(final_tracks)
-        en = response.record.energy[0]
+        if solver == 'vqe':
+            en = response['energy']
+        else:
+            en = response.record.energy[0]
 
         # output composition
         _, _, d_real = diff_rows(dw.get_real_doublets(), final_doublets)
@@ -81,7 +99,7 @@ def run_one(event, ds):
 
         # save response
         output_filename = op.join(
-            output_path,
+            output_path.format(ds=ds),
             output_prefix.format(event=event, ds=ds) + f'{solver}-{i}-response.pickle')
 
         with open(output_filename, 'wb') as f:

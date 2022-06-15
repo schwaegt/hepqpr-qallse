@@ -112,6 +112,15 @@ def process_response(response):
     return final_doublets, final_tracks
 
 
+def process_response_vqe(response_vqe):
+    sample = response_vqe['samples']
+    final_triplets = [Triplet.name_to_hit_ids(k) for k, v in sample.items() if v == 1]
+    all_doublets = tracks_to_xplets(final_triplets)
+    final_tracks, final_doublets = TrackRecreaterD().process_results(all_doublets)
+
+    return final_doublets, final_tracks
+
+
 def print_stats(dw, response, Q=None):
     final_doublets, final_tracks = process_response(response)
 
