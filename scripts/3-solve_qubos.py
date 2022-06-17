@@ -22,18 +22,29 @@ import os.path as op
 loglevel = logging.DEBUG
 
 events = [1000]
-dss = [2]
+dss = [1]
 repeat = 1
 
-data_path = 'C:/Users/timsc/qallse/models/ds{ds}/event00000{event}-hits.csv'  # path to the datasets
+data_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/event00000{event}-hits.csv'  # path to the datasets
 
-qubo_path = 'C:/Users/timsc/qallse/models/ds{ds}/'  # path where the qubos are pickled
+qubo_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/'  # path where the qubos are pickled
+sub_qubo_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/sub_qubos/'
 qubo_prefix = 'evt{event}-ds{ds}-'  # prefix for the qubo files
-output_path = 'C:/Users/timsc/qallse/models/ds{ds}/'  # where to serialize the responses
+sub_qubo_prefix = 'evt{event}-ds{ds}-sub{sub}-'
+output_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/'  # where to serialize the responses
 output_prefix = qubo_prefix  # prefix for serialized responses
 
 solver = 'vqe'  # solver to use
 solver_config = dict()  # parameters for the solver. Note that "seed" is generated later.
+vqe_config = {
+'backend_name': 'ibmq_qasm_simulator',
+'sub_qubo_size': 7,
+'reps': 0, # not implemented yet
+'entanglement': 'linear', # not implemented yet
+'optimizer_name': 'NFT',
+'maxiter': 512,
+'shots': 512
+}
 
 # ==== configure logging
 
@@ -58,7 +69,12 @@ def run_one(event, ds):
         with open(xplet_filepath, 'rb') as f:
             xplets = pickle.load(f)
         #list of QUBOS, to do: store as file in case VQE fails
-        Q_slices = slice_qubo(Q, xplets)
+        Q_slices = slice_qubo(Q, xplets, vqe_config['sub_qubo_size'])
+        #save sub-QUBOS
+        for count, sub_qubo in enumerate(Q_slices):
+            sub_qubo_filepath = op.join(qubo_path.format(ds=ds), 'sub_qubos/', sub_qubo_prefix.format(event=event, ds=ds, sub=count)+'qubo.pickle')
+            with open(sub_qubo_filepath, 'wb') as f:
+                pickle.dump(sub_qubo, f)
 
     for i in range(repeat):
         # set seed
@@ -75,13 +91,13 @@ def run_one(event, ds):
                 elif solver == 'dwave':
                     response = solve_dwave(Q, **solver_config)
                 elif solver == 'vqe':
-                    response = solve_vqe(Q_slices)
+                    response = solve_vqe(Q_slices, vqe_config)
                 else:
                     raise Exception('Invalid solver name.')
 
 
             if solver =='vqe':
-                final_doublets, final_tracks = process_response_vqe(response)
+                final_doublets, final_tracks, energy_total = process_response_vqe(response)
             else:
                 final_doublets, final_tracks = process_response(response)
 
@@ -89,7 +105,7 @@ def run_one(event, ds):
         p, r, ms = dw.compute_score(final_doublets)
         trackml = dw.compute_trackml_score(final_tracks)
         if solver == 'vqe':
-            en = response['energy']
+            en = energy_total
         else:
             en = response.record.energy[0]
 

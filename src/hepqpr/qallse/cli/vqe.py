@@ -21,9 +21,10 @@ import argparse
 from math import sqrt
 import threading
 import concurrent.futures
+from copy import copy
 
 
-def slice_qubo(Q, xplets):
+def slice_qubo(Q, xplets, size):
 
     '''Split QUBO into sub-QUBOs. Implementation not efficient !'''
 
@@ -56,19 +57,19 @@ def slice_qubo(Q, xplets):
 
     Q_linear = linear_qubo(Q)
     Q_linear_list = sorted(Q_linear.items(), key = lambda qubo_entry: max_rz_angle(qubo_entry, xplets))
-    size = 14
     Q_linear_slices = [dict(Q_linear_list[i*size:(i+1)*size]) for i in range(len(Q_linear_list)//size)]
     if len(Q_linear_list) % size != 0:
         Q_linear_slices.append(dict(Q_linear_list[-(len(Q_linear_list) % size):]))
 
     Q_slices = []
-    for Q_linear_slice in Q_linear_slices:
+    for count, Q_linear_slice in enumerate(Q_linear_slices):
         triplets = [x[0] for x in Q_linear_slice.keys()]
         Q_slice = {}
         for key, item in Q.items():
             if key[0] in triplets and key[1] in triplets:
                 Q_slice[(key[0], key[1])] = item
-        Q_slices.append(Q_slice)
+        Q_slice_tupel = (count, Q_slice)
+        Q_slices.append(Q_slice_tupel)
 
     return Q_slices
 
@@ -229,6 +230,19 @@ def construct_rotation_layer(n_qubits, gate, params):
 
     return qc
 
+
+def return_optimizer(optimizer_name, maxiter):
+
+    if optimizer_name=='SPSA':
+        optimizer=SPSA(maxiter=maxiter)
+    elif optimizer_name=='COBYLA':
+        optimizer=COBYLA(maxiter=maxiter)
+    elif optimizer_name=='NFT':
+        optimizer=NFT(maxiter=maxiter)
+
+    return optimizer
+
+
 def construct_entanglement_layer(n_qubits, entanglement, inverse=False):
 
     qc = QuantumCircuit(n_qubits)
@@ -276,54 +290,83 @@ def translate_vqe_result(result, relations):
     return result_translated
 
 
-def solve_vqe(Q_slices):
+def solve_vqe(Q_slices, vqe_config):
 
     n_slices = len(Q_slices)
 
-    result_dict = {}
-    result = {}
-    energy = 0
+    result_full = []
 
     global lock
     lock = threading.Lock()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=n_slices+1) as executor:
-         for result_slice, energy_slice in executor.map(solve_vqe_one, Q_slices):
-            result.update(result_slice)
-            energy += energy_slice
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n_slices+1) as executor_0:
+         for result_ten_runs_tupel in executor_0.map(lambda Q: solve_vqe_ten(Q, vqe_config=vqe_config), Q_slices):
+            result_full.append(result_ten_runs_tupel)
 
-    result_dict['samples'] = result
-    result_dict['energy'] = energy
-
-    return result_dict
+    return result_full
 
 
-def solve_vqe_one(Q):
+def solve_vqe_ten(Q_slice, vqe_config):
 
-    IBMQ.load_account()
-    provider = IBMQ.get_provider(hub='ibm-q-desy', group='internal', project='tracking')
+    try:
 
-    b_ij, a_i, relations = prepare_data_dicts(Q)
-    op = Tracking_Hamiltonian(b_ij, a_i)
-    n_qubits = len(relations)
-    params = ParameterVector('params', n_qubits)
-    ansatz = construct_rotation_layer(n_qubits, 'ry', params[0:n_qubits])
-    optimizer = NFT(maxiter=1200)
-    initial_point = [2 * np.pi * x for x in random_sample(n_qubits)]
-    options = {'backend_name': 'ibmq_qasm_simulator'}
-    runtime_inputs = {
-    'ansatz': ansatz,
-    'aux_operators': None,
-    'initial_layout': None,
-    'initial_parameters': initial_point,
-    'measurement_error_mitigation': None,
-    'operator': op,
-    'optimizer': optimizer,
-    'shots': 1024
-    }
-    job = provider.runtime.run(program_id='vqe',options=options,inputs=runtime_inputs)
-    result = job.result()
-    energy = result['optimal_value']
-    result_translated = translate_vqe_result(result, relations)
+        slice = Q_slice[0]
+        Q = Q_slice[1]
+        b_ij, a_i, relations = prepare_data_dicts(Q)
+        op = Tracking_Hamiltonian(b_ij, a_i)
+        n_qubits = len(relations)
+        params = ParameterVector('params', n_qubits)
+        ansatz = construct_rotation_layer(n_qubits, 'ry', params[0:n_qubits])
+        optimizer = return_optimizer(vqe_config['optimizer_name'], vqe_config['maxiter'])
+        options = {'backend_name': vqe_config['backend_name']}
+        runtime_inputs = {
+        'ansatz': ansatz,
+        'aux_operators': None,
+        'initial_layout': None,
+        'initial_parameters': None,
+        'measurement_error_mitigation': None,
+        'operator': op,
+        'optimizer': optimizer,
+        'shots': vqe_config['shots']
+        }
+        result_ten_runs = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=11) as executor_1:
+            for result_one_run in executor_1.map(lambda run: solve_vqe_one(run, options, runtime_inputs, n_qubits, relations), [i for i in range(5)]):
+                result_translated = translate_vqe_result(result_one_run, relations)
+                result_one_run.update({'eigenstate_translated': result_translated})
+                with lock:
+                    result_ten_runs.append(result_one_run)
+
+        result_ten_runs_tupel = (slice, result_ten_runs)
+
+        return result_ten_runs_tupel
+
+    except:
+
+        print('A full sclice failed')
 
 
-    return result_translated, energy
+
+def solve_vqe_one(run, options, runtime_inputs, n_qubits, relations):
+
+    try:
+
+        with lock:
+            runtime_inputs_local = copy(runtime_inputs)
+
+        IBMQ.load_account()
+        provider = IBMQ.get_provider(hub='ibm-q-desy', group='internal', project='tracking')
+
+        initial_point = [2 * np.pi * x for x in random_sample(n_qubits)]
+        runtime_inputs_local.update({'initial_parameters': initial_point})
+
+        job = provider.runtime.run(program_id='vqe',options=options,inputs=runtime_inputs_local)
+        result = job.result()
+
+        energy = result['optimal_value']
+        result_translated = translate_vqe_result(result, relations)
+
+        return result
+
+    except:
+
+        print('A single run failed')
