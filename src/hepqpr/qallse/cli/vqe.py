@@ -370,3 +370,27 @@ def solve_vqe_one(run, options, runtime_inputs, n_qubits, relations):
     except:
 
         print('A single run failed')
+
+
+def solve_eigensolver(Q_slices):
+
+    results = []
+
+    for Q_slice in Q_slices:
+        slice = Q_slice[0]
+        Q = Q_slice[1]
+        result_dict = {}
+        b_ij, a_i, relations = prepare_data_dicts(Q)
+        op = Tracking_Hamiltonian(b_ij, a_i)
+        npme = NumPyMinimumEigensolver()
+        result_eigensolver = npme.compute_minimum_eigenvalue(operator=op)
+        counts_eigensolver = result_eigensolver.eigenstate.to_dict_fn().sample()
+        result_dict.update({'eigenstate': counts_eigensolver})
+        result_dict.update({'optimal_value': result_eigensolver.eigenvalue})
+        result_translated = translate_vqe_result(result_dict, relations)
+        result_dict.update({'eigenstate_translated': result_translated})
+        result_tupel = (slice, result_dict)
+
+        results.append(result_tupel)
+
+    return results

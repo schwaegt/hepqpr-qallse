@@ -128,6 +128,21 @@ def process_response_vqe(response_vqe):
 
     return final_doublets, final_tracks, energy_total
 
+def process_response_eigensolver(response_eigensolver):
+
+    sample = {}
+    energy_total = 0
+    for result_tupel in response_eigensolver:
+        result = result_tupel[1]
+        sample.update(result['eigenstate_translated'])
+        energy_total += result['optimal_value']
+
+    final_triplets = [Triplet.name_to_hit_ids(k) for k, v in sample.items() if v == 1]
+    all_doublets = tracks_to_xplets(final_triplets)
+    final_tracks, final_doublets = TrackRecreaterD().process_results(all_doublets)
+
+    return final_doublets, final_tracks, energy_total
+
 
 def print_stats(dw, response, Q=None):
     final_doublets, final_tracks = process_response(response)

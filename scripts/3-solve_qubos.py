@@ -34,16 +34,16 @@ sub_qubo_prefix = 'evt{event}-ds{ds}-sub{sub}-'
 output_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/'  # where to serialize the responses
 output_prefix = qubo_prefix  # prefix for serialized responses
 
-solver = 'vqe'  # solver to use
+solver = 'eigensolver'  # solver to use
 solver_config = dict()  # parameters for the solver. Note that "seed" is generated later.
 vqe_config = {
-'backend_name': 'ibmq_qasm_simulator',
-'sub_qubo_size': 7,
+'backend_name': 'ibm_cairo',
+'sub_qubo_size': 19,
 'reps': 0, # not implemented yet
 'entanglement': 'linear', # not implemented yet
-'optimizer_name': 'NFT',
-'maxiter': 512,
-'shots': 512
+'optimizer_name': 'SPSA',
+'maxiter': 128,
+'shots': 256
 }
 
 # ==== configure logging
@@ -64,7 +64,7 @@ def run_one(event, ds):
     en0 = dw.compute_energy(Q)
 
     #slice qubo for VQE
-    if solver == 'vqe':
+    if solver == 'vqe' or 'eigensolver':
         xplet_filepath  = op.join(qubo_path.format(ds=ds), 'xplets.pickle')
         with open(xplet_filepath, 'rb') as f:
             xplets = pickle.load(f)
@@ -92,19 +92,23 @@ def run_one(event, ds):
                     response = solve_dwave(Q, **solver_config)
                 elif solver == 'vqe':
                     response = solve_vqe(Q_slices, vqe_config)
+                elif solver == 'eigensolver':
+                    response = solve_eigensolver(Q_slices)
                 else:
                     raise Exception('Invalid solver name.')
 
 
             if solver =='vqe':
                 final_doublets, final_tracks, energy_total = process_response_vqe(response)
+            elif solver == 'eigensolver':
+                final_doublets, final_tracks, energy_total = process_response_eigensolver(response)
             else:
                 final_doublets, final_tracks = process_response(response)
 
         # compute scores
         p, r, ms = dw.compute_score(final_doublets)
         trackml = dw.compute_trackml_score(final_tracks)
-        if solver == 'vqe':
+        if solver == 'vqe' or solver =='eigensolver':
             en = energy_total
         else:
             en = response.record.energy[0]
