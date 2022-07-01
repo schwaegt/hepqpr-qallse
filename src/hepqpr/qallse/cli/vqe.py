@@ -22,41 +22,86 @@ from math import sqrt
 import threading
 import concurrent.futures
 from copy import copy
+import random
+
+
+def linear_qubo(Q):
+
+    '''Extract linear terms of QUBO. Including terms with weight 0 explicitly'''
+
+    Q_linear = {}
+    triplets = []
+    for key, item in Q.items():
+        if key[0] == key[1]:
+            Q_linear[key] = item
+            triplets.append(key[0])
+
+    for key in Q:
+        if key[0] not in triplets:
+            Q_linear[(key[0], key[0])] = 0.
+            triplets.append(key[0])
+        if key[1] not in triplets:
+            Q_linear[(key[1], key[1])] = 0.
+            triplets.append(key[0])
+
+    return Q_linear
+
+
+def max_rz_angle(qubo_entry, xplets):
+
+    rz_t1_d1 = xplets[xplets[qubo_entry[0][0]]['d1']]['rz_angle']
+    rz_t1_d2 = xplets[xplets[qubo_entry[0][0]]['d2']]['rz_angle']
+    rz_t2_d1 = xplets[xplets[qubo_entry[0][1]]['d1']]['rz_angle']
+    rz_t2_d2 = xplets[xplets[qubo_entry[0][1]]['d2']]['rz_angle']
+
+    return max(rz_t1_d1, rz_t1_d2, rz_t2_d1 ,rz_t2_d2)
+
+
+def energy_bit_flip(state, triplet_id, relations, H):
+
+    en = H.eval(state).eval(state)
+    state_list = list(state)
+    index = relations[triplet_id]
+    if state_list[index] == '0':
+        state_list[index] = '1'
+    elif state_list[index] == '1':
+        state_list[index] = '0'
+    state_flipped = ''.join(state_list)
+    en_flipped = H.eval(state_flipped).eval(state_flipped)
+    en_diff = abs(en_flipped - en)
+    print('flip')
+    return en_diff
 
 
 def slice_qubo(Q, xplets, size):
 
     '''Split QUBO into sub-QUBOs. Implementation not efficient !'''
 
-    def linear_qubo(Q):
-        Q_linear = {}
-        triplets = []
-        for key, item in Q.items():
-            if key[0] == key[1]:
-                Q_linear[key] = item
-                triplets.append(key[0])
-
-        for key in Q:
-            if key[0] not in triplets:
-                Q_linear[(key[0], key[1])] = 0.
-                triplets.append(key[0])
-            if key[1] not in triplets:
-                Q_linear[(key[1], key[1])] = 0.
-                triplets.append(key[0])
-
-        return Q_linear
-
-    def max_rz_angle(qubo_entry, xplets):
-
-        rz_t1_d1 = xplets[xplets[qubo_entry[0][0]]['d1']]['rz_angle']
-        rz_t1_d2 = xplets[xplets[qubo_entry[0][0]]['d2']]['rz_angle']
-        rz_t2_d1 = xplets[xplets[qubo_entry[0][1]]['d1']]['rz_angle']
-        rz_t2_d2 = xplets[xplets[qubo_entry[0][1]]['d2']]['rz_angle']
-
-        return max(rz_t1_d1, rz_t1_d2, rz_t2_d1 ,rz_t2_d2)
-
     Q_linear = linear_qubo(Q)
     Q_linear_list = sorted(Q_linear.items(), key = lambda qubo_entry: max_rz_angle(qubo_entry, xplets))
+    Q_linear_slices = [dict(Q_linear_list[i*size:(i+1)*size]) for i in range(len(Q_linear_list)//size)]
+    if len(Q_linear_list) % size != 0:
+        Q_linear_slices.append(dict(Q_linear_list[-(len(Q_linear_list) % size):]))
+
+    Q_slices = []
+    for count, Q_linear_slice in enumerate(Q_linear_slices):
+        triplets = [x[0] for x in Q_linear_slice.keys()]
+        Q_slice = {}
+        for key, item in Q.items():
+            if key[0] in triplets and key[1] in triplets:
+                Q_slice[(key[0], key[1])] = item
+        Q_slice_tupel = (count, Q_slice)
+        Q_slices.append(Q_slice_tupel)
+
+    return Q_slices
+
+
+def create_sub_qubos(Q, H, relations, xplets, size, state):
+
+    '''Split QUBO into sub-QUBOs acoording to impact of bit flip on energy'''
+
+    Q_linear = linear_qubo(Q)
+    Q_linear_list = sorted(Q_linear.items(), key = lambda qubo_entry: - energy_bit_flip(state, qubo_entry[0][0], relations, H))
     Q_linear_slices = [dict(Q_linear_list[i*size:(i+1)*size]) for i in range(len(Q_linear_list)//size)]
     if len(Q_linear_list) % size != 0:
         Q_linear_slices.append(dict(Q_linear_list[-(len(Q_linear_list) % size):]))
@@ -83,63 +128,42 @@ def prepare_data_dicts(data):
     relations = {}
     k = 0
 
-    def complete_b_ij(b_ij, nqubits):
-
-        for i in range(nqubits):
-            for j in range(i):
-                if (i, j) not in b_ij:
-
-                    b_ij[(i, j)] = 0
-
-        return b_ij
-
-
-    def complete_a_i(a_i, nqubits):
-
-        for i in range(nqubits):
-            if i not in a_i:
-
-                a_i[i] = 0
-
-        return a_i
-
     for key in data:
         if key[1] in relations:
-
             j = relations[key[1]]
 
         else:
-
             j = k
             relations[key[1]] = j
             k += 1
 
-
         if key[0] in relations:
-
             i = relations[key[0]]
 
         else:
-
             i = k
             relations[key[0]] = i
             k += 1
 
         if i > j:
-
             b_ij.update({(i, j) : data[(key[0], key[1])]})
 
         elif i < j:
-
             b_ij.update({(j, i) : data[(key[0], key[1])]})
 
         elif i == j:
-
             a_i.update({i : data[(key[0], key[1])]})
 
     nqubits = len(relations)
-    b_ij = complete_b_ij(b_ij, nqubits)
-    a_i = complete_a_i(a_i, nqubits)
+
+    for i in range(nqubits):
+        for j in range(i):
+            if (i, j) not in b_ij:
+                b_ij[(i, j)] = 0
+
+    for i in range(nqubits):
+        if i not in a_i:
+            a_i[i] = 0
 
     return b_ij, a_i, relations
 
@@ -290,7 +314,7 @@ def translate_vqe_result(result, relations):
     return result_translated
 
 
-def solve_vqe(Q_slices, vqe_config):
+def solve_vqe_slices(Q_slices, solver_config):
 
     n_slices = len(Q_slices)
 
@@ -299,13 +323,72 @@ def solve_vqe(Q_slices, vqe_config):
     global lock
     lock = threading.Lock()
     with concurrent.futures.ThreadPoolExecutor(max_workers=n_slices+1) as executor_0:
-         for result_ten_runs_tupel in executor_0.map(lambda Q: solve_vqe_ten(Q, vqe_config=vqe_config), Q_slices):
+         for result_ten_runs_tupel in executor_0.map(lambda Q: solve_vqe_ten(Q, solver_config = solver_config), Q_slices):
             result_full.append(result_ten_runs_tupel)
 
     return result_full
 
 
-def solve_vqe_ten(Q_slice, vqe_config):
+def solve_vqe_sub_qubos(Q, xplets, **kwargs):
+
+    b_ij, a_i, relations = prepare_data_dicts(Q)
+    n_triplets = len(relations)
+    H = Tracking_Hamiltonian(b_ij, a_i)
+    state = ''.join(random.choices(['0', '1'], k = n_triplets))
+    size = kwargs['sub_qubo_size']
+
+    for i in range(kwargs['sub_qubo_iterations']):
+        result_full = []
+        Q_slices = create_sub_qubos(Q, H, relations, xplets, size, state)
+        n_slices = len(Q_slices)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_slices+1) as executor:
+             for result_ten_runs_tupel in executor.map(lambda Q: solve_vqe_ten(Q, solver_config = solver_config), Q_slices):
+                result_full.append(result_ten_runs_tupel)
+
+        state_list = list(state)
+
+        for result_ten_runs_tupel in result_full:
+            result_ten_runs = result_ten_runs_tupel[1]
+            result_lowest_energy = min(result_ten_runs, key=lambda result_one_run: result_one_run['optimal_value'])
+
+            for triplet_id, value in result_lowest_energy['eigenstate_translated'].items():
+                index = relations[triplet_id]
+                state_list[index] = str(value)
+
+        state = ''.join(state_list)
+
+    return result_full
+
+
+def solve_eigensolver_sub_qubos(Q, xplets, **kwargs):
+
+    b_ij, a_i, relations = prepare_data_dicts(Q)
+    n_triplets = len(relations)
+    H = Tracking_Hamiltonian(b_ij, a_i)
+    state = ''.join(random.choices(['0', '1'], k = n_triplets))
+    size = kwargs['sub_qubo_size']
+
+    for i in range(kwargs['sub_qubo_iterations']):
+        Q_slices = create_sub_qubos(Q, H, relations, xplets, size, state)
+        n_slices = len(Q_slices)
+        results = solve_eigensolver_slices(Q_slices)
+
+        state_list = list(state)
+
+        for result_tupel in results:
+                result = result_tupel[1]
+
+                for triplet_id, value in result['eigenstate_translated'].items():
+                    index = relations[triplet_id]
+                    state_list[index] = str(value)
+
+        state = ''.join(state_list)
+
+    return results
+
+
+def solve_vqe_ten(Q_slice, **kwargs):
 
     try:
 
@@ -316,8 +399,8 @@ def solve_vqe_ten(Q_slice, vqe_config):
         n_qubits = len(relations)
         params = ParameterVector('params', n_qubits)
         ansatz = construct_rotation_layer(n_qubits, 'ry', params[0:n_qubits])
-        optimizer = return_optimizer(vqe_config['optimizer_name'], vqe_config['maxiter'])
-        options = {'backend_name': vqe_config['backend_name']}
+        optimizer = return_optimizer(kwargs['optimizer_name'], kwargs['maxiter'])
+        options = {'backend_name': kwargs['backend_name']}
         runtime_inputs = {
         'ansatz': ansatz,
         'aux_operators': None,
@@ -326,11 +409,11 @@ def solve_vqe_ten(Q_slice, vqe_config):
         'measurement_error_mitigation': None,
         'operator': op,
         'optimizer': optimizer,
-        'shots': vqe_config['shots']
+        'shots': kwargs['shots']
         }
         result_ten_runs = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=11) as executor_1:
-            for result_one_run in executor_1.map(lambda run: solve_vqe_one(run, options, runtime_inputs, n_qubits, relations), [i for i in range(5)]):
+            for result_one_run in executor_1.map(lambda run: solve_vqe_one(run, options, runtime_inputs, n_qubits, relations), [i for i in range(10)]):
                 result_translated = translate_vqe_result(result_one_run, relations)
                 result_one_run.update({'eigenstate_translated': result_translated})
                 with lock:
@@ -372,8 +455,9 @@ def solve_vqe_one(run, options, runtime_inputs, n_qubits, relations):
         print('A single run failed')
 
 
-def solve_eigensolver(Q_slices):
+def solve_eigensolver_slices(Q_slices):
 
+    n_slices = len(Q_slices)
     results = []
 
     for Q_slice in Q_slices:
@@ -392,5 +476,6 @@ def solve_eigensolver(Q_slices):
         result_tupel = (slice, result_dict)
 
         results.append(result_tupel)
+        print('solved slice '+ str(slice+1) + ' of ' + str(n_slices))
 
     return results

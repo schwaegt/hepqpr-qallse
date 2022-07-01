@@ -1,2 +1,0 @@
-event,percent,seed,repeat,tracks_gen,n_true,n_gen,n_real,n_real_all,n_fakes,precision,recall,trackml,missings,en,en0,endiff,qtime_cpu,qtime_wall,cpu_time,wall_time
-1000,1,450978248,0,9,37,59,37,59,0,1.0,1.0,1.0,0,-28.766725650675596,-28.730169262562747,-0.03655638811284945,0.03125,0.034384300000000145,0.03125,0.040115199999999795

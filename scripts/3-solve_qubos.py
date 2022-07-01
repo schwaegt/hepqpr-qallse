@@ -28,23 +28,23 @@ repeat = 1
 data_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/event00000{event}-hits.csv'  # path to the datasets
 
 qubo_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/'  # path where the qubos are pickled
-sub_qubo_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/sub_qubos/'
 qubo_prefix = 'evt{event}-ds{ds}-'  # prefix for the qubo files
-sub_qubo_prefix = 'evt{event}-ds{ds}-sub{sub}-'
+qubo_slice_prefix = 'evt{event}-ds{ds}-sub{sub}-'
 output_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/'  # where to serialize the responses
 output_prefix = qubo_prefix  # prefix for serialized responses
 
-solver = 'eigensolver'  # solver to use
-solver_config = dict()  # parameters for the solver. Note that "seed" is generated later.
-vqe_config = {
+solver = 'eigensolver_sub_qubos'  # solver to use
+solver_config = {
 'backend_name': 'ibm_cairo',
+'qubo_slice_size': 19,
 'sub_qubo_size': 19,
 'reps': 0, # not implemented yet
 'entanglement': 'linear', # not implemented yet
 'optimizer_name': 'SPSA',
 'maxiter': 128,
-'shots': 256
-}
+'shots': 256,
+'sub_qubo_iterations': 10
+} # parameters for the solver. Note that "seed" is generated later.
 
 # ==== configure logging
 
@@ -63,18 +63,18 @@ def run_one(event, ds):
         Q = pickle.load(f)
     en0 = dw.compute_energy(Q)
 
+    xplet_filepath  = op.join(qubo_path.format(ds=ds), 'xplets.pickle')
+    with open(xplet_filepath, 'rb') as f:
+        xplets = pickle.load(f)
     #slice qubo for VQE
-    if solver == 'vqe' or 'eigensolver':
-        xplet_filepath  = op.join(qubo_path.format(ds=ds), 'xplets.pickle')
-        with open(xplet_filepath, 'rb') as f:
-            xplets = pickle.load(f)
-        #list of QUBOS, to do: store as file in case VQE fails
-        Q_slices = slice_qubo(Q, xplets, vqe_config['sub_qubo_size'])
-        #save sub-QUBOS
-        for count, sub_qubo in enumerate(Q_slices):
-            sub_qubo_filepath = op.join(qubo_path.format(ds=ds), 'sub_qubos/', sub_qubo_prefix.format(event=event, ds=ds, sub=count)+'qubo.pickle')
-            with open(sub_qubo_filepath, 'wb') as f:
-                pickle.dump(sub_qubo, f)
+    if solver == 'vqe_slices' or solver == 'eigensolver_slices':
+        #list of QUBOS
+        Q_slices = slice_qubo(Q, xplets, solver_config['qubo_slice_size'])
+        #save QUBO slices
+        for count, qubo_slice in enumerate(Q_slices):
+            qubo_slice_filepath = op.join(qubo_path.format(ds=ds), 'qubo_slices/', qubo_slice_prefix.format(event=event, ds=ds, sub=count)+'qubo.pickle')
+            with open(qubo_slice_filepath, 'wb') as f:
+                pickle.dump(qubo_slice, f)
 
     for i in range(repeat):
         # set seed
@@ -90,17 +90,22 @@ def run_one(event, ds):
                     response = solve_qbsolv(Q, **solver_config)
                 elif solver == 'dwave':
                     response = solve_dwave(Q, **solver_config)
-                elif solver == 'vqe':
-                    response = solve_vqe(Q_slices, vqe_config)
-                elif solver == 'eigensolver':
-                    response = solve_eigensolver(Q_slices)
+                elif solver == 'vqe_slices':
+                    response = solve_vqe_slices(Q_slices, **solver_config)
+                elif solver == 'vqe_sub_qubos':
+                    response = solve_vqe_sub_qubos(Q, xplets, **solver_config)
+                elif solver == 'eigensolver_slices':
+                    response = solve_eigensolver_slices(Q_slices, **solver_config)
+                elif solver == 'eigensolver_sub_qubos':
+                    response = solve_eigensolver_sub_qubos(Q, xplets, **solver_config)
+
                 else:
                     raise Exception('Invalid solver name.')
 
 
-            if solver =='vqe':
+            if solver == 'vqe_slices' or solver == 'vqe_sub_qubos':
                 final_doublets, final_tracks, energy_total = process_response_vqe(response)
-            elif solver == 'eigensolver':
+            elif solver == 'eigensolver_slices' or solver == 'eigensolver_sub_qubos':
                 final_doublets, final_tracks, energy_total = process_response_eigensolver(response)
             else:
                 final_doublets, final_tracks = process_response(response)
@@ -108,7 +113,7 @@ def run_one(event, ds):
         # compute scores
         p, r, ms = dw.compute_score(final_doublets)
         trackml = dw.compute_trackml_score(final_tracks)
-        if solver == 'vqe' or solver =='eigensolver':
+        if solver == 'vqe_slices' or solver =='vqe_sub_qubos' or solver =='eigensolver_slices' or solver =='eigensolver_sub_qubos':
             en = energy_total
         else:
             en = response.record.energy[0]
@@ -152,4 +157,7 @@ if __name__ == '__main__':
               'qtime_cpu,qtime_wall,cpu_time,wall_time'
 
     stats = pd.DataFrame(mat, columns=headers.split(','))
-    stats.to_csv(f'solve_qubos_{solver}.csv', index=False)
+    stats_filename = op.join(
+        output_path.format(ds=ds),
+        output_prefix.format(event=event, ds=ds) + f'stats_{solver}.csv')
+    stats.to_csv(stats_filename, index=False)
