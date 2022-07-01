@@ -22,7 +22,7 @@ import os.path as op
 loglevel = logging.DEBUG
 
 events = [1000]
-dss = [1]
+dss = [5]
 repeat = 1
 
 data_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/event00000{event}-hits.csv'  # path to the datasets
@@ -37,7 +37,7 @@ solver = 'eigensolver_sub_qubos'  # solver to use
 solver_config = {
 'backend_name': 'ibm_cairo',
 'qubo_slice_size': 19,
-'sub_qubo_size': 19,
+'sub_qubo_size': 7,
 'reps': 0, # not implemented yet
 'entanglement': 'linear', # not implemented yet
 'optimizer_name': 'SPSA',

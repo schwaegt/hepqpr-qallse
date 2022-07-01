@@ -47,6 +47,20 @@ def linear_qubo(Q):
     return Q_linear
 
 
+def qubo_from_linear(Q_full, Q_linear):
+
+    '''complete linear qubo with quadratic terms'''
+
+    Q = {}
+    triplets = [x[0] for x in Q_linear.keys()]
+
+    for key, value in Q_full.items():
+        if key[0] in triplets and key[1] in triplets:
+            Q[(key[0], key[1])] = value
+
+    return Q
+
+
 def max_rz_angle(qubo_entry, xplets):
 
     rz_t1_d1 = xplets[xplets[qubo_entry[0][0]]['d1']]['rz_angle']
@@ -69,7 +83,6 @@ def energy_bit_flip(state, triplet_id, relations, H):
     state_flipped = ''.join(state_list)
     en_flipped = H.eval(state_flipped).eval(state_flipped)
     en_diff = abs(en_flipped - en)
-    print('flip')
     return en_diff
 
 
@@ -168,7 +181,86 @@ def prepare_data_dicts(data):
     return b_ij, a_i, relations
 
 
-def Tracking_Hamiltonian(b_ij, a_i):
+def tracking_hamiltonian(Q):
+
+    '''Build Tracking Hamiltonian directly from QUBO'''
+
+    Q_linear = linear_qubo(Q)
+    n_triplets = len(Q_linear)
+    H = I - I
+    H = H^n_triplets
+    relations = {}
+    #prepare quadratic term first because we need all b_ij for the linear term
+    k = 0
+    b_sum = 0.
+    for key, value in Q.items():
+        if key[0] != key[1]:
+
+            b_sum += value
+
+            if key[0] not in relations:
+                relations[key[0]] = k
+                k += 1
+
+            if key[1] not in relations:
+                relations[key[1]] = k
+                k += 1
+
+            i = max(relations[key[0]], relations[key[1]])
+            j = min(relations[key[0]], relations[key[1]])
+
+            n_left = n_triplets - i - 1
+            n_middle = i - j - 1
+            n_right = j
+
+            temp = Z
+
+            if n_left > 0:
+                id_left = I^n_left
+                temp = id_left^temp
+
+            if n_middle > 0:
+                id_middle = I^n_middle
+                temp = temp^id_middle
+
+            temp = temp^Z
+
+            if n_right > 0:
+                id_right = I^n_right
+                temp = temp^id_right
+
+            H += value * temp
+        #prepare linear term
+    for key, value in Q.items():
+        if key[0] == key[1]:
+
+            if key[0] not in relations:
+                relations[key[0]] =  k
+                k += 1
+
+            i = relations[key[0]]
+
+            n_left = n_triplets - i - 1
+            n_right = i
+
+            temp = Z
+
+            if n_left > 0:
+
+                id_left = I^n_left
+                temp = id_left^temp
+
+            if n_right > 0:
+
+                id_right = I^n_right
+                temp = temp^id_right
+
+            H += -2.0 * (b_sum + value) * temp
+
+    return H, relations
+
+
+def Tracking_Hamiltonian_old(b_ij, a_i):
 
     '''Given coupling strenghts b_ij and bias weights a_i return the tracking Hamiltonian as a Qiskit PauliOp object'''
 
@@ -331,9 +423,8 @@ def solve_vqe_slices(Q_slices, solver_config):
 
 def solve_vqe_sub_qubos(Q, xplets, **kwargs):
 
-    b_ij, a_i, relations = prepare_data_dicts(Q)
+    H, relations = tracking_hamiltonian(Q)
     n_triplets = len(relations)
-    H = Tracking_Hamiltonian(b_ij, a_i)
     state = ''.join(random.choices(['0', '1'], k = n_triplets))
     size = kwargs['sub_qubo_size']
 
@@ -363,9 +454,8 @@ def solve_vqe_sub_qubos(Q, xplets, **kwargs):
 
 def solve_eigensolver_sub_qubos(Q, xplets, **kwargs):
 
-    b_ij, a_i, relations = prepare_data_dicts(Q)
+    H, relations = tracking_hamiltonian(Q)
     n_triplets = len(relations)
-    H = Tracking_Hamiltonian(b_ij, a_i)
     state = ''.join(random.choices(['0', '1'], k = n_triplets))
     size = kwargs['sub_qubo_size']
 
@@ -394,8 +484,7 @@ def solve_vqe_ten(Q_slice, **kwargs):
 
         slice = Q_slice[0]
         Q = Q_slice[1]
-        b_ij, a_i, relations = prepare_data_dicts(Q)
-        op = Tracking_Hamiltonian(b_ij, a_i)
+        op, relations = tracking_hamiltonian(Q)
         n_qubits = len(relations)
         params = ParameterVector('params', n_qubits)
         ansatz = construct_rotation_layer(n_qubits, 'ry', params[0:n_qubits])
@@ -464,8 +553,7 @@ def solve_eigensolver_slices(Q_slices):
         slice = Q_slice[0]
         Q = Q_slice[1]
         result_dict = {}
-        b_ij, a_i, relations = prepare_data_dicts(Q)
-        op = Tracking_Hamiltonian(b_ij, a_i)
+        op, relations = tracking_hamiltonian(Q)
         npme = NumPyMinimumEigensolver()
         result_eigensolver = npme.compute_minimum_eigenvalue(operator=op)
         counts_eigensolver = result_eigensolver.eigenstate.to_dict_fn().sample()
