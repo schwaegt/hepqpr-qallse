@@ -86,15 +86,13 @@ def energy_bit_flip(state, triplet_id, relations, H):
     return en_diff
 
 
-def slice_qubo(Q, xplets, size):
+def slice_qubo(Q, xplets, size, overlap):
 
     '''Split QUBO into sub-QUBOs. Implementation not efficient !'''
 
     Q_linear = linear_qubo(Q)
     Q_linear_list = sorted(Q_linear.items(), key = lambda qubo_entry: max_rz_angle(qubo_entry, xplets))
-    Q_linear_slices = [dict(Q_linear_list[i*size:(i+1)*size]) for i in range(len(Q_linear_list)//size)]
-    if len(Q_linear_list) % size != 0:
-        Q_linear_slices.append(dict(Q_linear_list[-(len(Q_linear_list) % size):]))
+    Q_linear_slices = [dict(Q_linear_list[i:i+size]) for i in range(0, len(Q_linear_list), size-overlap)]
 
     Q_slices = []
     for count, Q_linear_slice in enumerate(Q_linear_slices):
@@ -186,18 +184,17 @@ def tracking_hamiltonian(Q):
     '''Build Tracking Hamiltonian directly from QUBO'''
 
     Q_linear = linear_qubo(Q)
-    n_triplets = len(Q_linear)
+    Q_full = qubo_from_linear(Q, Q_linear)
+    triplets = [x[0] for x in Q_linear.keys()]
+    n_triplets = len(triplets)
+    b_sums = {triplet_id: 0. for triplet_id in triplets}
     H = I - I
     H = H^n_triplets
     relations = {}
     #prepare quadratic term first because we need all b_ij for the linear term
     k = 0
-    b_sum = 0.
-    for key, value in Q.items():
+    for key, value in Q_full.items():
         if key[0] != key[1]:
-
-            b_sum += value
-
             if key[0] not in relations:
                 relations[key[0]] = k
                 k += 1
@@ -205,6 +202,9 @@ def tracking_hamiltonian(Q):
             if key[1] not in relations:
                 relations[key[1]] = k
                 k += 1
+
+            b_sums[key[0]] += value
+            b_sums[key[1]] += value
 
             i = max(relations[key[0]], relations[key[1]])
             j = min(relations[key[0]], relations[key[1]])
@@ -231,7 +231,7 @@ def tracking_hamiltonian(Q):
 
             H += value * temp
         #prepare linear term
-    for key, value in Q.items():
+    for key, value in Q_full.items():
         if key[0] == key[1]:
 
             if key[0] not in relations:
@@ -255,7 +255,7 @@ def tracking_hamiltonian(Q):
                 id_right = I^n_right
                 temp = temp^id_right
 
-            H += -2.0 * (b_sum + value) * temp
+            H += -1. * (b_sums[key[0]] + 2. * value) * temp
 
     return H, relations
 

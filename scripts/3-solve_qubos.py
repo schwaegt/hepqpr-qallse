@@ -37,7 +37,8 @@ solver = 'eigensolver_sub_qubos'  # solver to use
 solver_config = {
 'backend_name': 'ibm_cairo',
 'qubo_slice_size': 19,
-'sub_qubo_size': 7,
+'overlap': 5,
+'sub_qubo_size': 19,
 'reps': 0, # not implemented yet
 'entanglement': 'linear', # not implemented yet
 'optimizer_name': 'SPSA',
@@ -69,7 +70,7 @@ def run_one(event, ds):
     #slice qubo for VQE
     if solver == 'vqe_slices' or solver == 'eigensolver_slices':
         #list of QUBOS
-        Q_slices = slice_qubo(Q, xplets, solver_config['qubo_slice_size'])
+        Q_slices = slice_qubo(Q, xplets, solver_config['qubo_slice_size'], solver_config['overlap'])
         #save QUBO slices
         for count, qubo_slice in enumerate(Q_slices):
             qubo_slice_filepath = op.join(qubo_path.format(ds=ds), 'qubo_slices/', qubo_slice_prefix.format(event=event, ds=ds, sub=count)+'qubo.pickle')
@@ -85,7 +86,7 @@ def run_one(event, ds):
         with time_this() as time_info:
             with time_this() as qtime_info:
                 if solver == 'neal':
-                    response = solve_neal(Q, **solver_config)
+                    response = solve_neal(Q)
                 elif solver == 'qbsolv':
                     response = solve_qbsolv(Q, **solver_config)
                 elif solver == 'dwave':
@@ -95,7 +96,7 @@ def run_one(event, ds):
                 elif solver == 'vqe_sub_qubos':
                     response = solve_vqe_sub_qubos(Q, xplets, **solver_config)
                 elif solver == 'eigensolver_slices':
-                    response = solve_eigensolver_slices(Q_slices, **solver_config)
+                    response = solve_eigensolver_slices(Q_slices)
                 elif solver == 'eigensolver_sub_qubos':
                     response = solve_eigensolver_sub_qubos(Q, xplets, **solver_config)
 
