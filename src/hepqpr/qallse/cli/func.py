@@ -103,8 +103,9 @@ def solve_dwave(Q, conf_file, **kwargs):
 
 # ======= results
 
-def process_response(response):
+def process_response(response, vars_determined):
     sample = next(response.samples())
+    sample.update(vars_determined)
     final_triplets = [Triplet.name_to_hit_ids(k) for k, v in sample.items() if v == 1]
     all_doublets = tracks_to_xplets(final_triplets)
     final_tracks, final_doublets = TrackRecreaterD().process_results(all_doublets)
@@ -112,31 +113,50 @@ def process_response(response):
     return final_doublets, final_tracks
 
 
-def process_response_vqe(response_vqe):
+def process_response_vqe(results_all_slices, vars_determined):
 
     sample = {}
-    energy_total = 0
-    for result_ten_runs_tupel in response_vqe:
-        result_ten_runs = result_ten_runs_tupel[1]
-        result_lowest_energy = min(result_ten_runs, key=lambda result_one_run: result_one_run['optimal_value'])
-        sample.update(result_lowest_energy['eigenstate_translated'])
-        energy_total += result_lowest_energy['optimal_value']
+    energy_total = 0.
 
+    for results_one_slice in results_all_slices:
+        result_lowest_energy = min(results_one_slice, key=lambda result: result['result']['optimal_value'])
+        sample.update(result_lowest_energy['result']['eigenstate_translated'])
+        energy_total += result_lowest_energy['result']['optimal_value']
+
+    sample.update(vars_determined)
     final_triplets = [Triplet.name_to_hit_ids(k) for k, v in sample.items() if v == 1]
     all_doublets = tracks_to_xplets(final_triplets)
     final_tracks, final_doublets = TrackRecreaterD().process_results(all_doublets)
 
     return final_doublets, final_tracks, energy_total
 
-def process_response_eigensolver(response_eigensolver):
+
+# def process_response_vqe(response_vqe):
+#
+#     sample = {}
+#     energy_total = 0
+#     for result_ten_runs_tupel in response_vqe:
+#         result_ten_runs = result_ten_runs_tupel[1]
+#         result_lowest_energy = min(result_ten_runs, key=lambda result_one_run: result_one_run['optimal_value'])
+#         sample.update(result_lowest_energy['eigenstate_translated'])
+#         energy_total += result_lowest_energy['optimal_value']
+#
+#     final_triplets = [Triplet.name_to_hit_ids(k) for k, v in sample.items() if v == 1]
+#     all_doublets = tracks_to_xplets(final_triplets)
+#     final_tracks, final_doublets = TrackRecreaterD().process_results(all_doublets)
+#
+#     return final_doublets, final_tracks, energy_total
+
+
+def process_response_eigensolver(results_all_slices, vars_determined):
 
     sample = {}
     energy_total = 0
-    for result_tupel in response_eigensolver:
-        result = result_tupel[1]
+    for result in results_all_slices:
         sample.update(result['eigenstate_translated'])
         energy_total += result['optimal_value']
 
+    sample.update(vars_determined)
     final_triplets = [Triplet.name_to_hit_ids(k) for k, v in sample.items() if v == 1]
     all_doublets = tracks_to_xplets(final_triplets)
     final_tracks, final_doublets = TrackRecreaterD().process_results(all_doublets)

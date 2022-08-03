@@ -22,31 +22,34 @@ import os.path as op
 loglevel = logging.DEBUG
 
 events = [1000]
-dss = [5]
+dss = [10]
 repeat = 1
 
 data_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/event00000{event}-hits.csv'  # path to the datasets
 
 qubo_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/'  # path where the qubos are pickled
 qubo_prefix = 'evt{event}-ds{ds}-'  # prefix for the qubo files
-qubo_slice_prefix = 'evt{event}-ds{ds}-sub{sub}-'
+qubo_slice_prefix = 'evt{event}-ds{ds}-sz{sz}-ov{ov}-slice{slice}'
 output_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/'  # where to serialize the responses
 output_prefix = qubo_prefix  # prefix for serialized responses
 
-solver = 'eigensolver_sub_qubos'  # solver to use
+solver = 'eigensolver_slices'  # solver to use
 solver_config = {
-'backend_name': 'ibm_cairo',
+'backend_name': 'ibmq_qasm_simulator',
 'qubo_slice_size': 19,
 'overlap': 5,
 'sub_qubo_size': 19,
 'reps': 0, # not implemented yet
 'entanglement': 'linear', # not implemented yet
-'optimizer_name': 'SPSA',
-'maxiter': 128,
-'shots': 256,
-'sub_qubo_iterations': 10
+'optimizer_name': 'NFT',
+'maxiter': 200,
+'shots': 1024,
+'sub_qubo_iterations': 10,
+'vqe_repetitions': 3,
+'reduce_qubo': True
 } # parameters for the solver. Note that "seed" is generated later.
-
+size = solver_config['qubo_slice_size']
+overlap = solver_config['overlap']
 # ==== configure logging
 
 init_logging(logging.DEBUG, sys.stdout)
@@ -59,10 +62,14 @@ def run_one(event, ds):
     path = data_path.format(event=event, ds=ds)
     dw = DataWrapper.from_path(path)
     qubo_filepath = op.join(qubo_path.format(ds=ds), 'qubo.pickle')
+    vars_determined = {}
 
     with open(qubo_filepath, 'rb') as f:
         Q = pickle.load(f)
     en0 = dw.compute_energy(Q)
+
+    if solver_config['reduce_qubo']:
+        Q, vars_determined = reduce_qubo(Q)
 
     xplet_filepath  = op.join(qubo_path.format(ds=ds), 'xplets.pickle')
     with open(xplet_filepath, 'rb') as f:
@@ -73,7 +80,10 @@ def run_one(event, ds):
         Q_slices = slice_qubo(Q, xplets, solver_config['qubo_slice_size'], solver_config['overlap'])
         #save QUBO slices
         for count, qubo_slice in enumerate(Q_slices):
-            qubo_slice_filepath = op.join(qubo_path.format(ds=ds), 'qubo_slices/', qubo_slice_prefix.format(event=event, ds=ds, sub=count)+'qubo.pickle')
+            qubo_slice_path = op.join(qubo_path.format(ds=ds), 'qubo-slices-sz{sz}-ov{ov}/'.format(sz=size, ov=overlap), qubo_slice_prefix.format(event=event, ds=ds, sz=size, ov=overlap, slice=count))
+            if not os.path.exists(qubo_slice_path):
+                os.makedirs(qubo_slice_path)
+            qubo_slice_filepath = op.join(qubo_slice_path, qubo_slice_prefix.format(event=event, ds=ds, sz=size, ov=overlap, slice=count) + '-qubo.pickle')
             with open(qubo_slice_filepath, 'wb') as f:
                 pickle.dump(qubo_slice, f)
 
@@ -96,20 +106,19 @@ def run_one(event, ds):
                 elif solver == 'vqe_sub_qubos':
                     response = solve_vqe_sub_qubos(Q, xplets, **solver_config)
                 elif solver == 'eigensolver_slices':
-                    response = solve_eigensolver_slices(Q_slices)
+                    response = solve_eigensolver_slices(Q_slices, vars_determined)
                 elif solver == 'eigensolver_sub_qubos':
                     response = solve_eigensolver_sub_qubos(Q, xplets, **solver_config)
 
                 else:
                     raise Exception('Invalid solver name.')
 
-
             if solver == 'vqe_slices' or solver == 'vqe_sub_qubos':
-                final_doublets, final_tracks, energy_total = process_response_vqe(response)
+                final_doublets, final_tracks, energy_total = process_response_vqe(response, vars_determined)
             elif solver == 'eigensolver_slices' or solver == 'eigensolver_sub_qubos':
-                final_doublets, final_tracks, energy_total = process_response_eigensolver(response)
+                final_doublets, final_tracks, energy_total = process_response_eigensolver(response, vars_determined)
             else:
-                final_doublets, final_tracks = process_response(response)
+                final_doublets, final_tracks = process_response(response, vars_determined)
 
         # compute scores
         p, r, ms = dw.compute_score(final_doublets)
@@ -129,7 +138,7 @@ def run_one(event, ds):
             output_prefix.format(event=event, ds=ds) + f'{solver}-{i}-response.pickle')
 
         with open(output_filename, 'wb') as f:
-            pickle.dump(response, f)
+            pickle.dump({'response': response, 'vars_determined': vars_determined}, f)
 
         # gather stats
         mat.append(
