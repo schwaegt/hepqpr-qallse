@@ -118,9 +118,9 @@ def process_response_vqe(results_all_slices, vars_determined):
     sample = {}
     energy_total = 0.
 
-    for results_one_slice in results_all_slices:
-        result_lowest_energy = min(results_one_slice, key=lambda result: result['result']['optimal_value'])
-        sample.update(result_lowest_energy['result']['eigenstate_translated'])
+    for results_one_slice in results_all_slices['results_all_slices']:
+        result_lowest_energy = sorted(results_one_slice['results_one_slice'], key=lambda result: result['result']['optimal_value'])[0]
+        sample.update(result_lowest_energy['eigenstate_translated'])
         energy_total += result_lowest_energy['result']['optimal_value']
 
     sample.update(vars_determined)
@@ -152,7 +152,7 @@ def process_response_eigensolver(results_all_slices, vars_determined):
 
     sample = {}
     energy_total = 0
-    for result in results_all_slices:
+    for result in results_all_slices['results']:
         sample.update(result['eigenstate_translated'])
         energy_total += result['optimal_value']
 

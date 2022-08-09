@@ -8,9 +8,8 @@ from qiskit import QuantumCircuit
 from qiskit.opflow import X, Z, I, CircuitSampler, ExpectationFactory, PauliExpectation, CircuitStateFn, StateFn
 from qiskit.utils import QuantumInstance, algorithm_globals
 from qiskit.algorithms import VQE, NumPyMinimumEigensolver
-from qiskit.algorithms.optimizers import COBYLA, L_BFGS_B, SPSA, QNSPSA, NFT
+from qiskit.algorithms.optimizers import COBYLA, NFT, SPSA
 from qiskit.circuit import ParameterVector
-from qiskit.circuit.library import EfficientSU2
 from qiskit.providers.aer.noise import NoiseModel, ReadoutError
 from qiskit_ibm_runtime import QiskitRuntimeService
 from qiskit_optimization import QuadraticProgram
@@ -66,7 +65,8 @@ def qubo_from_linear(Q_full, Q_linear):
 def reduce_qubo(qubo):
 
     '''Implements QUBO preprocessing of arxiv 1705.09844.
-        Neglect constant shift of objective function'''
+        Neglect constant shift of objective function.
+        Input {(triplet_1_id, triplet_2_id): weight, ...}.'''
 
     vars_all = {}
     vars_determined = {}
@@ -208,9 +208,12 @@ def slice_qubo(Q, xplets, size, overlap):
     Q_linear = linear_qubo(Q)
     Q_linear_list = sorted(Q_linear.items(), key = lambda qubo_entry: max_rz_angle(qubo_entry, xplets))
     Q_linear_slices = [dict(Q_linear_list[i:i+size]) for i in range(0, len(Q_linear_list), size-overlap)]
-    Q_slices = []
+    Q_slices = {
+        'Q_slices': [],
+        'size_total': 0
+    }
 
-    for Q_linear_slice in Q_linear_slices:
+    for count, Q_linear_slice in enumerate(Q_linear_slices):
         triplets = [x[0] for x in Q_linear_slice.keys()]
         Q_slice = {}
 
@@ -218,7 +221,9 @@ def slice_qubo(Q, xplets, size, overlap):
             if key[0] in triplets and key[1] in triplets:
                 Q_slice[(key[0], key[1])] = item
 
-        Q_slices.append(Q_slice)
+        size = len(triplets)
+        Q_slices['size_total'] += size
+        Q_slices['Q_slices'].append({'qubo': Q_slice, 'slice': count, 'size': size, 'overlap': overlap})
 
     return Q_slices
 
@@ -551,7 +556,7 @@ def translate_vqe_result(result, relations):
     return result_translated
 
 
-def solve_vqe_slices(Q_slices, **kwargs):
+def solve_vqe_slices(Q_slices, vars_determined, **kwargs):
 
     def callback(*args):
     # check if interim results, since both interim results (list) and final results (dict) are returned
@@ -565,10 +570,10 @@ def solve_vqe_slices(Q_slices, **kwargs):
     service = QiskitRuntimeService(channel='ibm_quantum')
     jobs_all_slices = []
 
-    for slice in Q_slices:
-        jobs_one_slice = []
-        op, relations = tracking_hamiltonian(slice)
-        n_qubits = len(relations)
+    for slice in Q_slices['Q_slices']:
+        jobs_one_slice = {}
+        op, relations = tracking_hamiltonian(slice['qubo'])
+        n_qubits = slice['size']
         params = ParameterVector('params', n_qubits)
         ansatz = construct_rotation_layer(n_qubits, 'ry', params[0:n_qubits])
         optimizer = return_optimizer(kwargs['optimizer_name'], kwargs['maxiter'])
@@ -583,6 +588,13 @@ def solve_vqe_slices(Q_slices, **kwargs):
             'optimizer': optimizer,
             'shots': kwargs['shots']
         }
+        jobs_one_slice.update({
+            'relations': relations,
+            'slice': slice['slice'],
+            'size': n_qubits,
+            'overlap': slice['overlap'],
+            'jobs': []
+        })
 
         for i in range(kwargs['vqe_repetitions']):
             intermediate_info = {"nfev": [], "parameters": [], "energy": [], "stddev": []}
@@ -593,27 +605,44 @@ def solve_vqe_slices(Q_slices, **kwargs):
                 instance='ibm-q-desy/internal/tracking',
                 callback=callback
             )
-            jobs_one_slice.append({'job': job, 'intermediate_info': intermediate_info, 'relations': relations})
+            jobs_one_slice['jobs'].append({
+                'job': job,
+                'intermediate_info': intermediate_info
+                })
 
         jobs_all_slices.append(jobs_one_slice)
 
-    results_all_slices = []
+    input('Check if jobs have finished. Press Enter to retrieve results')
+    results_all_slices = {
+        'results_all_slices': [],
+        'size_total': Q_slices['size_total']
+        }
+    results_all_slices.update(kwargs)
+    results_all_slices.update({'vars_determined': vars_determined})
 
     for jobs_one_slice in jobs_all_slices:
-        results_one_slice = []
+        results_one_slice = {
+            'results_one_slice': [],
+            'slice': jobs_one_slice['slice'],
+            'size': jobs_one_slice['size'],
+            'overlap': jobs_one_slice['overlap']
+        }
 
-        for job in jobs_one_slice:
+        for job in jobs_one_slice['jobs']:
             try:
                 result = job['job'].result()
                 intermediate_info = job['intermediate_info']
-                relations = job['relations']
-                result.update({'eigenstate_translated': translate_vqe_result(result, relations)})
-                results_one_slice.append({'result': result, 'intermediate_info': intermediate_info, 'relations': relations})
+                relations = jobs_one_slice['relations']
+                results_one_slice['results_one_slice'].append({
+                    'result': result,
+                    'eigenstate_translated': translate_vqe_result(result, relations),
+                    'intermediate_info': intermediate_info
+                     })
 
             except:
                 print('A single job failed')
 
-        results_all_slices.append(results_one_slice)
+        results_all_slices['results_all_slices'].append(results_one_slice)
 
     return results_all_slices
 
@@ -653,7 +682,7 @@ def solve_vqe_sub_qubos(Q, xplets, **kwargs):
                 'aux_operators': None,
                 'initial_layout': None,
                 'initial_parameters': None,
-                'measurement_error_mitigation': None,
+                'measurement_error_mitigation': kwargs['measurement_error_mitigation'],
                 'operator': op,
                 'optimizer': optimizer,
                 'shots': kwargs['shots']
@@ -723,14 +752,17 @@ def solve_eigensolver_sub_qubos(Q, xplets, **kwargs):
     return results
 
 
-def solve_eigensolver_slices(Q_slices, vars_determined):
+def solve_eigensolver_slices(Q_slices, vars_determined, **kwargs):
 
-    n_slices = len(Q_slices)
-    results = []
-
-    for count, Q in enumerate(Q_slices):
+    n_slices = len(Q_slices['Q_slices'])
+    results = {
+        'results': [],
+    }
+    results.update(kwargs)
+    results.update({'vars_determined': vars_determined})
+    for count, Q in enumerate(Q_slices['Q_slices']):
         result_dict = {}
-        op, relations = tracking_hamiltonian(Q)
+        op, relations = tracking_hamiltonian(Q['qubo'])
         npme = NumPyMinimumEigensolver()
         result_eigensolver = npme.compute_minimum_eigenvalue(operator=op)
         counts_eigensolver = result_eigensolver.eigenstate.to_dict_fn().sample()
@@ -738,8 +770,8 @@ def solve_eigensolver_slices(Q_slices, vars_determined):
         result_dict.update({'optimal_value': result_eigensolver.eigenvalue})
         result_translated = translate_vqe_result(result_dict, relations)
         result_dict.update({'eigenstate_translated': result_translated})
-        result_dict.update({'vars_determined': vars_determined})
-        results.append(result_dict)
+        result_dict.update({'slice': Q['slice']})
+        results['results'].append(result_dict)
         print('solved slice '+ str(count+1) + ' of ' + str(n_slices))
 
     return results

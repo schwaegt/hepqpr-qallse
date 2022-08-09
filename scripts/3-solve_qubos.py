@@ -25,28 +25,28 @@ events = [1000]
 dss = [10]
 repeat = 1
 
-data_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/event00000{event}-hits.csv'  # path to the datasets
-
-qubo_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/'  # path where the qubos are pickled
-qubo_prefix = 'evt{event}-ds{ds}-'  # prefix for the qubo files
+data_path = 'C:/Users/timsc/hepqpr-qallse-data/evt{evt}/ds{ds}/event00000{evt}-hits.csv'  # path to the datasets
+qubo_path = 'C:/Users/timsc/hepqpr-qallse-data/evt{evt}/ds{ds}/'  # path where the qubos are pickled
 qubo_slice_prefix = 'evt{event}-ds{ds}-sz{sz}-ov{ov}-slice{slice}'
-output_path = 'C:/Users/timsc/hepqpr-qallse-data/ds{ds}/'  # where to serialize the responses
-output_prefix = qubo_prefix  # prefix for serialized responses
+output_path = 'C:/Users/timsc/hepqpr-qallse-data/evt{evt}/ds{ds}/'  # where to serialize the responses
+stats_path = 'C:/Users/timsc/hepqpr-qallse-data/'
 
-solver = 'eigensolver_slices'  # solver to use
+solver = 'vqe_slices'  # solver to use
 solver_config = {
+'solver': solver,
 'backend_name': 'ibmq_qasm_simulator',
-'qubo_slice_size': 19,
+'qubo_slice_size': 20,
 'overlap': 5,
 'sub_qubo_size': 19,
 'reps': 0, # not implemented yet
 'entanglement': 'linear', # not implemented yet
 'optimizer_name': 'NFT',
-'maxiter': 200,
+'maxiter': 1024,
 'shots': 1024,
 'sub_qubo_iterations': 10,
-'vqe_repetitions': 3,
-'reduce_qubo': True
+'vqe_repetitions': 10,
+'reduce_qubo': False,
+'measurement_error_mitigation': None,
 } # parameters for the solver. Note that "seed" is generated later.
 size = solver_config['qubo_slice_size']
 overlap = solver_config['overlap']
@@ -59,9 +59,9 @@ init_logging(logging.DEBUG, sys.stdout)
 
 def run_one(event, ds):
     # load data
-    path = data_path.format(event=event, ds=ds)
+    path = data_path.format(evt=event, ds=ds)
     dw = DataWrapper.from_path(path)
-    qubo_filepath = op.join(qubo_path.format(ds=ds), 'qubo.pickle')
+    qubo_filepath = op.join(qubo_path.format(evt=event, ds=ds), 'qubo.pickle')
     vars_determined = {}
 
     with open(qubo_filepath, 'rb') as f:
@@ -71,7 +71,7 @@ def run_one(event, ds):
     if solver_config['reduce_qubo']:
         Q, vars_determined = reduce_qubo(Q)
 
-    xplet_filepath  = op.join(qubo_path.format(ds=ds), 'xplets.pickle')
+    xplet_filepath  = op.join(qubo_path.format(evt=event, ds=ds), 'xplets.pickle')
     with open(xplet_filepath, 'rb') as f:
         xplets = pickle.load(f)
     #slice qubo for VQE
@@ -79,18 +79,22 @@ def run_one(event, ds):
         #list of QUBOS
         Q_slices = slice_qubo(Q, xplets, solver_config['qubo_slice_size'], solver_config['overlap'])
         #save QUBO slices
-        for count, qubo_slice in enumerate(Q_slices):
-            qubo_slice_path = op.join(qubo_path.format(ds=ds), 'qubo-slices-sz{sz}-ov{ov}/'.format(sz=size, ov=overlap), qubo_slice_prefix.format(event=event, ds=ds, sz=size, ov=overlap, slice=count))
-            if not os.path.exists(qubo_slice_path):
-                os.makedirs(qubo_slice_path)
-            qubo_slice_filepath = op.join(qubo_slice_path, qubo_slice_prefix.format(event=event, ds=ds, sz=size, ov=overlap, slice=count) + '-qubo.pickle')
-            with open(qubo_slice_filepath, 'wb') as f:
-                pickle.dump(qubo_slice, f)
+        # for count, qubo_slice in enumerate(Q_slices):
+        #     qubo_slice_path = op.join(qubo_path.format(ds=ds), 'qubo-slices-sz{sz}-ov{ov}/'.format(sz=size, ov=overlap), qubo_slice_prefix.format(event=event, ds=ds, sz=size, ov=overlap, slice=count))
+        #     if not os.path.exists(qubo_slice_path):
+        #         os.makedirs(qubo_slice_path)
+        #     qubo_slice_filepath = op.join(qubo_slice_path, qubo_slice_prefix.format(event=event, ds=ds, sz=size, ov=overlap, slice=count) + '-qubo.pickle')
+        #     with open(qubo_slice_filepath, 'wb') as f:
+        #         pickle.dump(qubo_slice, f)
 
     for i in range(repeat):
         # set seed
         seed = random.randint(0, 1 << 30)
-        solver_config['seed'] = seed
+        solver_config.update({'seed': seed})
+        unique_prefix = str(event) + '-' + str(ds)
+        for value in solver_config.values():
+            unique_prefix += '-' + str(value)
+
 
         # build model
         with time_this() as time_info:
@@ -102,11 +106,11 @@ def run_one(event, ds):
                 elif solver == 'dwave':
                     response = solve_dwave(Q, **solver_config)
                 elif solver == 'vqe_slices':
-                    response = solve_vqe_slices(Q_slices, **solver_config)
+                    response = solve_vqe_slices(Q_slices, vars_determined, **solver_config)
                 elif solver == 'vqe_sub_qubos':
                     response = solve_vqe_sub_qubos(Q, xplets, **solver_config)
                 elif solver == 'eigensolver_slices':
-                    response = solve_eigensolver_slices(Q_slices, vars_determined)
+                    response = solve_eigensolver_slices(Q_slices, vars_determined, **solver_config)
                 elif solver == 'eigensolver_sub_qubos':
                     response = solve_eigensolver_sub_qubos(Q, xplets, **solver_config)
 
@@ -134,11 +138,11 @@ def run_one(event, ds):
 
         # save response
         output_filename = op.join(
-            output_path.format(ds=ds),
-            output_prefix.format(event=event, ds=ds) + f'{solver}-{i}-response.pickle')
+            output_path.format(evt=event, ds=ds),
+            unique_prefix + f'-{i}-response.pickle')
 
         with open(output_filename, 'wb') as f:
-            pickle.dump({'response': response, 'vars_determined': vars_determined}, f)
+            pickle.dump(response, f)
 
         # gather stats
         mat.append(
@@ -167,7 +171,11 @@ if __name__ == '__main__':
               'qtime_cpu,qtime_wall,cpu_time,wall_time'
 
     stats = pd.DataFrame(mat, columns=headers.split(','))
+    stats_prefix = ''
+    for value in solver_config.values():
+        stats_prefix += '-' + str(value)
+    stats_prefix = stats_prefix[1:]
     stats_filename = op.join(
-        output_path.format(ds=ds),
-        output_prefix.format(event=event, ds=ds) + f'stats_{solver}.csv')
+        stats_path,
+        str(stats_prefix) + '-stats.csv')
     stats.to_csv(stats_filename, index=False)
