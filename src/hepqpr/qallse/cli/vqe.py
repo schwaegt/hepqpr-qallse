@@ -10,6 +10,7 @@ from qiskit.utils import QuantumInstance, algorithm_globals
 from qiskit.algorithms import VQE, NumPyMinimumEigensolver
 from qiskit.algorithms.optimizers import COBYLA, NFT, SPSA
 from qiskit.circuit import ParameterVector
+from qiskit.circuit.library import EfficientSU2
 from qiskit.providers.aer.noise import NoiseModel, ReadoutError
 from qiskit_ibm_runtime import QiskitRuntimeService
 from qiskit_optimization import QuadraticProgram
@@ -69,7 +70,7 @@ def reduce_qubo(qubo):
         Input {(triplet_1_id, triplet_2_id): weight, ...}.'''
 
     vars_all = {}
-    vars_determined = {}
+    vars_predetermined = {}
     sums_positive_offdiag = {}
     sums_negative_offdiag = {}
     #Paper defines preprocessing for maximizing
@@ -114,7 +115,7 @@ def reduce_qubo(qubo):
             #rule_1
             if qubo.get((var_i, var_i), 0.) + sums_negative_offdiag.get(var_i, 0.) >= 0:
                 var_determined = True
-                vars_determined.update({var_i: 1})
+                vars_predetermined.update({var_i: 1})
                 vars_all.pop(var_i)
                 #update diagonal coefficients
                 temp = {key: value for key, value in qubo.items() if (key[0] == var_i) ^ (key[1] == var_i)}
@@ -134,7 +135,7 @@ def reduce_qubo(qubo):
             #rule_2
             elif qubo.get((var_i, var_i), 0.) + sums_positive_offdiag.get(var_i, 0.) <= 0:
                 var_determined = True
-                vars_determined.update({var_i: 0})
+                vars_predetermined.update({var_i: 0})
                 vars_all.pop(var_i)
                 #no update of diagonal coefficients
                 #remove row_var and column_var from qubo
@@ -152,7 +153,7 @@ def reduce_qubo(qubo):
             for var_h in vars_all_copy:
                 if (var_i != var_h) and (qubo.get((var_i, var_h), 0.) > 0) and (qubo.get((var_i, var_i), 0.) + qubo.get((var_h, var_h), 0.) + qubo.get((var_i, var_h), 0.) + sums_negative_offdiag.get(var_i, 0.) + sums_negative_offdiag.get(var_h, 0.)) >= 0:
                     var_determined = True
-                    vars_determined.update({var_i: 1, var_h: 1})
+                    vars_predetermined.update({var_i: 1, var_h: 1})
                     vars_all.pop(var_i)
                     vars_all.pop(var_h)
                     #not sure if remove from qubo
@@ -173,7 +174,7 @@ def reduce_qubo(qubo):
 
     qubo = {key: -value for key, value in qubo.items()}
 
-    return qubo, vars_determined
+    return qubo, vars_predetermined
 
 
 def max_rz_angle(qubo_entry, xplets):
@@ -556,7 +557,7 @@ def translate_vqe_result(result, relations):
     return result_translated
 
 
-def solve_vqe_slices(Q_slices, vars_determined, **kwargs):
+def solve_vqe_slices(Q_slices, **kwargs):
 
     def callback(*args):
     # check if interim results, since both interim results (list) and final results (dict) are returned
@@ -574,8 +575,7 @@ def solve_vqe_slices(Q_slices, vars_determined, **kwargs):
         jobs_one_slice = {}
         op, relations = tracking_hamiltonian(slice['qubo'])
         n_qubits = slice['size']
-        params = ParameterVector('params', n_qubits)
-        ansatz = construct_rotation_layer(n_qubits, 'ry', params[0:n_qubits])
+        ansatz = EfficientSU2(num_qubits=n_qubits, su2_gates=['ry'], reps=kwargs['reps'], entanglement=kwargs['entanglement'])
         optimizer = return_optimizer(kwargs['optimizer_name'], kwargs['maxiter'])
         options = {'backend_name': kwargs['backend_name']}
         runtime_inputs = {
@@ -617,8 +617,6 @@ def solve_vqe_slices(Q_slices, vars_determined, **kwargs):
         'results_all_slices': [],
         'size_total': Q_slices['size_total']
         }
-    results_all_slices.update(kwargs)
-    results_all_slices.update({'vars_determined': vars_determined})
 
     for jobs_one_slice in jobs_all_slices:
         results_one_slice = {
@@ -752,14 +750,13 @@ def solve_eigensolver_sub_qubos(Q, xplets, **kwargs):
     return results
 
 
-def solve_eigensolver_slices(Q_slices, vars_determined, **kwargs):
+def solve_eigensolver_slices(Q_slices, **kwargs):
 
     n_slices = len(Q_slices['Q_slices'])
     results = {
         'results': [],
     }
-    results.update(kwargs)
-    results.update({'vars_determined': vars_determined})
+
     for count, Q in enumerate(Q_slices['Q_slices']):
         result_dict = {}
         op, relations = tracking_hamiltonian(Q['qubo'])

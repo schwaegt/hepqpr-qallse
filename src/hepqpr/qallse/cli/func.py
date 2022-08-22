@@ -66,6 +66,14 @@ def solve_neal(Q, seed=None, **kwargs):
     return response
 
 
+def solve_neal_slices(Q_slices):
+    response = []
+    for Q in Q_slices['Q_slices']:
+        response.append(solve_neal(Q['qubo']))
+
+    return response
+
+
 def solve_qbsolv(Q, logfile=None, seed=None, **kwargs):
     from hepqpr.qallse.other.stdout_redirect import capture_stdout
     from dwave_qbsolv import QBSolv
@@ -103,18 +111,37 @@ def solve_dwave(Q, conf_file, **kwargs):
 
 # ======= results
 
-def process_response(response, vars_determined):
+def process_response(response):
     sample = next(response.samples())
-    sample.update(vars_determined)
     final_triplets = [Triplet.name_to_hit_ids(k) for k, v in sample.items() if v == 1]
+    final_triplets.extend([Triplet.name_to_hit_ids(k) for k, v in vars_predetermined.items() if v ==1])
+    all_doublets = tracks_to_xplets(final_triplets)
+    final_tracks, final_doublets = TrackRecreaterD().process_results(all_doublets)
+    energy = response.record.energy[0]
+
+    return final_doublets, final_tracks, energy
+
+
+def process_response_neal_slices(result):
+    energy_total = 0.
+    response = result['response']
+    vars_predetermined = result['vars_predetermined']
+    final_triplets = [Triplet.name_to_hit_ids(k) for k, v in vars_predetermined.items() if v ==1]
+    for res in response:
+        sample = next(res.samples())
+        final_triplets.extend([Triplet.name_to_hit_ids(k) for k, v in sample.items() if v == 1])
+        energy_total += res.record.energy[0]
+
     all_doublets = tracks_to_xplets(final_triplets)
     final_tracks, final_doublets = TrackRecreaterD().process_results(all_doublets)
 
-    return final_doublets, final_tracks
+    return final_doublets, final_tracks, energy_total
 
 
-def process_response_vqe(results_all_slices, vars_determined):
+def process_response_vqe(result):
 
+    results_all_slices = result['response']
+    vars_predetermined = result['vars_predetermined']
     sample = {}
     energy_total = 0.
 
@@ -123,8 +150,8 @@ def process_response_vqe(results_all_slices, vars_determined):
         sample.update(result_lowest_energy['eigenstate_translated'])
         energy_total += result_lowest_energy['result']['optimal_value']
 
-    sample.update(vars_determined)
     final_triplets = [Triplet.name_to_hit_ids(k) for k, v in sample.items() if v == 1]
+    final_triplets.extend([Triplet.name_to_hit_ids(k) for k, v in vars_predetermined.items() if v ==1])
     all_doublets = tracks_to_xplets(final_triplets)
     final_tracks, final_doublets = TrackRecreaterD().process_results(all_doublets)
 
@@ -148,16 +175,18 @@ def process_response_vqe(results_all_slices, vars_determined):
 #     return final_doublets, final_tracks, energy_total
 
 
-def process_response_eigensolver(results_all_slices, vars_determined):
+def process_response_eigensolver(result):
 
+    results_all_slices = result['response']
+    vars_predetermined = result['vars_predetermined']
     sample = {}
     energy_total = 0
     for result in results_all_slices['results']:
         sample.update(result['eigenstate_translated'])
         energy_total += result['optimal_value']
 
-    sample.update(vars_determined)
     final_triplets = [Triplet.name_to_hit_ids(k) for k, v in sample.items() if v == 1]
+    final_triplets.extend([Triplet.name_to_hit_ids(k) for k, v in vars_predetermined.items() if v ==1])
     all_doublets = tracks_to_xplets(final_triplets)
     final_tracks, final_doublets = TrackRecreaterD().process_results(all_doublets)
 

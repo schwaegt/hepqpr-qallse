@@ -16,12 +16,12 @@ from hepqpr.qallse.cli.func import *
 
 loglevel = logging.DEBUG
 
-events = [1000] # events to run
-dss = [10] # densities, here just ds10
+events = [1000 + x for x in range(10)] # events to run
+dss = [100] # densities, here just ds100
 
-data_path = '/tmp/hpt-collapse/ds{ds}/event00000{event}-hits.csv'
+data_path = 'C:/Users/timsc/hepqpr-qallse-data/evt{event}/ds{ds}/event00000{event}-hits.csv'
 
-output_path = '/tmp/'
+output_path = 'C:/Users/timsc/hepqpr-qallse-data/evt{event}/ds{ds}/'
 output_prefix = 'evt{event}-ds{ds}-'
 
 model_class = QallseD0  # model class to use
@@ -56,9 +56,12 @@ if __name__ == '__main__':
                 model.build_model(doublets)
 
             # dump model to a file
+            if not os.path.exists(output_path.format(event=event, ds=ds)):
+                    os.makedirs(output_path.format(event=event, ds=ds))
+
             Q = dumper.dump_model(
                 model,
-                output_path=output_path,
+                output_path=output_path.format(event=event, ds=ds),
                 prefix=output_prefix.format(event=event, ds=ds),
                 **dump_config
             )
